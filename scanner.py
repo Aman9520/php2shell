@@ -34,6 +34,11 @@ _PHPSESSID_VAL_RE = re.compile(r"PHPSESSID=([^;,\s]+)", re.IGNORECASE)
 _HEALTHY_SID_RE = re.compile(r"^[A-Za-z0-9,\-]{16,48}$")
 _META_GEN_RE = re.compile(r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']([^"\']+)["\']', re.IGNORECASE)
 _PHPINFO_RE = re.compile(r"phpinfo\(\)|PHP Version\s*</td>|<title>phpinfo\(\)", re.IGNORECASE)
+# Preconditions parsed from an exposed phpinfo() page (read-only).
+_UPLOAD_PROGRESS_RE = re.compile(r"session\.upload_progress\.enabled\s*</td>\s*<td[^>]*>\s*(On|Off|1|0)", re.IGNORECASE)
+_SAPI_RE = re.compile(r"Server API\s*</td>\s*<td[^>]*>\s*([^<]+)", re.IGNORECASE)
+# Default field name PHP watches for upload-progress tracking.
+_UPLOAD_PROGRESS_FIELD = "PHP_SESSION_UPLOAD_PROGRESS"
 
 # CMS fingerprints: name -> list of regexes checked against headers + body.
 _CMS_SIGNS = {
@@ -46,6 +51,23 @@ _CMS_SIGNS = {
 }
 # Common paths that may expose phpinfo() output (checked only in Deep profile).
 _PHPINFO_PATHS = ("/phpinfo.php", "/info.php", "/php_info.php", "/test.php", "/i.php")
+
+# WAF / CDN fingerprints -> provider. Several of these vendors shipped
+# out-of-the-box PHP2Shell mitigations (per the Wiz advisory), so a match means
+# exploitation may be blocked at the edge even while the PHP version is unpatched.
+_WAF_SIGNS = {
+    "Cloudflare": (("server", "cloudflare"), ("cf-ray", ""), ("cf-cache-status", "")),
+    "Akamai": (("server", "akamai"), ("x-akamai-transformed", ""), ("x-akamai-request-id", "")),
+    "AWS CloudFront": (("server", "cloudfront"), ("x-amz-cf-id", ""), ("via", "cloudfront")),
+    "Fastly": (("x-served-by", "cache-"), ("x-fastly-request-id", ""), ("fastly-io-info", "")),
+    "Imperva": (("x-iinfo", ""), ("x-cdn", "incapsula")),
+    "Sucuri": (("server", "sucuri"), ("x-sucuri-id", "")),
+    "Vercel": (("server", "vercel"), ("x-vercel-id", "")),
+    "Google Cloud": (("server", "google frontend"), ("via", "google")),
+    "Microsoft Azure": (("x-azure-ref", ""), ("server", "azure")),
+}
+# Providers that the advisory lists as having deployed PHP2Shell mitigations.
+_MITIGATING = {"Cloudflare", "Akamai", "AWS CloudFront", "Fastly", "Imperva", "Google Cloud", "Microsoft Azure", "Vercel"}
 
 _BODY_CAP = 200_000  # only scan the first ~200 KB of any response body
 
@@ -148,6 +170,29 @@ def _meta_generator(body: str) -> Optional[str]:
     return m.group(1).strip() if m else None
 
 
+def _detect_waf(headers) -> Optional[str]:
+    """Identify a WAF/CDN in front of the target from its response headers."""
+    for provider, rules in _WAF_SIGNS.items():
+        for name, needle in rules:
+            val = headers.get(name, "")
+            if val and (needle == "" or needle.lower() in val.lower()):
+                return provider
+    return None
+
+
+def _upload_progress_enabled(phpinfo_body: str) -> Optional[bool]:
+    """Read session.upload_progress.enabled from an exposed phpinfo() page."""
+    m = _UPLOAD_PROGRESS_RE.search(phpinfo_body or "")
+    if not m:
+        return None
+    return m.group(1).lower() in ("on", "1")
+
+
+def _sapi(phpinfo_body: str) -> Optional[str]:
+    m = _SAPI_RE.search(phpinfo_body or "")
+    return m.group(1).strip() if m else None
+
+
 def _http_class(status) -> str:
     if not isinstance(status, int):
         return "http-x"
@@ -207,8 +252,16 @@ async def scan_one(client: httpx.AsyncClient, raw_url: str, cfg: Dict) -> Dict:
     if cms:
         methods.append(f"{cms} detected")
 
+    # 4b. WAF / CDN fingerprint — several providers shipped PHP2Shell mitigations
+    waf = _detect_waf(resp.headers)
+    if waf:
+        methods.append(f"{waf} (WAF/CDN)")
+
     phpinfo_url = None
     error_leak = None
+    upload_progress = None   # True / False / None (precondition for CVE-2026-109618)
+    sapi = None              # Server API: FPM / CGI / module
+    multipart_reachable = None
 
     if deep:
         # 5. phpinfo() exposure probe — a few common info pages
@@ -226,6 +279,11 @@ async def scan_one(client: httpx.AsyncClient, raw_url: str, cfg: Dict) -> Dict:
                     pv = _extract_php(bi) or _extract_php(ri.headers.get("x-powered-by", ""))
                     if pv:
                         php = pv
+                    # Read the vulnerable-feature preconditions (read-only)
+                    upload_progress = _upload_progress_enabled(bi)
+                    sapi = _sapi(bi)
+                    if upload_progress:
+                        methods.append("upload_progress enabled")
                     break
 
         # 6. Error-page version leak — request a path that should 404
@@ -261,6 +319,27 @@ async def scan_one(client: httpx.AsyncClient, raw_url: str, cfg: Dict) -> Dict:
                     php = pv
                     methods.append(f"path probe ({extra})")
                     break
+
+        # 8. Upload-progress reachability — a SINGLE benign, well-formed multipart
+        #    request (exactly what a normal file-upload form sends). It makes NO
+        #    attempt to trigger the flaw (no oversized data, no OOM): it only
+        #    confirms the multipart / upload-progress code path is reachable and
+        #    observes the response cookie. Purely a precondition check.
+        if php or session_cookie or cms:
+            try:
+                probe = await client.post(
+                    origin_of(str(resp.url)) + "/",
+                    data={_UPLOAD_PROGRESS_FIELD: "probe"},
+                    files={"file": ("probe.txt", b"php2scanner", "text/plain")},
+                    timeout=timeout, follow_redirects=follow,
+                )
+                multipart_reachable = True  # server accepted and processed the multipart POST
+                probe_cookie = ", ".join(probe.headers.get_list("set-cookie"))
+                if not session_cookie:
+                    session_cookie = _php_session_cookie(probe_cookie)
+                methods.append("upload-progress reachable")
+            except Exception:  # noqa: BLE001
+                multipart_reachable = None
 
     # PHP runtime confirmed by any strong signal
     php_confirmed = bool(php) or bool(session_cookie) or ("php" in (powered + " " + server).lower()) or bool(cms)
@@ -331,6 +410,22 @@ async def scan_one(client: httpx.AsyncClient, raw_url: str, cfg: Dict) -> Dict:
     if state == "vuln" and headline and headline["conditional"] and headline["condition_met"] != "likely":
         confidence = "Low" if headline["condition_met"] == "unlikely" else "Medium"
 
+    # Exploitability assessment: version-in-range PLUS confirmed preconditions is a
+    # stronger "really vulnerable" signal than a version match alone (still no exploit).
+    preconditions: List[str] = []
+    if upload_progress is True:
+        preconditions.append("session.upload_progress enabled")
+    if multipart_reachable:
+        preconditions.append("multipart path reachable")
+    if sid_anomaly:
+        preconditions.append("anomalous PHPSESSID observed")
+    if state == "vuln":
+        exploitability = "Preconditions confirmed" if preconditions else "Version affected"
+    elif state == "potential":
+        exploitability = "Preconditions present — version unconfirmed" if preconditions else "PHP confirmed — version hidden"
+    else:
+        exploitability = "—"
+
     how = methods[0] if methods else "not confirmed"
     evidence = {
         "final_url": str(resp.url),
@@ -343,7 +438,15 @@ async def scan_one(client: httpx.AsyncClient, raw_url: str, cfg: Dict) -> Dict:
         "versions_seen": sorted(versions_seen) or ["(none)"],
         "version_conflict": len({v for v in versions_seen if v}) > 1,
         "cms": cms or "(none detected)",
+        "waf": waf or "(none detected)",
+        "mitigation_note": (f"{waf} may provide an edge mitigation — patch the PHP version regardless"
+                            if (waf in _MITIGATING and state in ("vuln", "potential")) else ""),
         "os_hint": os_hint or "(unknown)",
+        "sapi": sapi or "(unknown)",
+        "upload_progress": ("enabled" if upload_progress is True else "disabled" if upload_progress is False else "(not checked)"),
+        "multipart_reachable": bool(multipart_reachable),
+        "preconditions": preconditions,
+        "exploitability": exploitability,
         "meta_generator": meta_gen or "(none)",
         "phpinfo_exposed": phpinfo_url or "(not found)",
         "confidence": confidence,
@@ -364,6 +467,9 @@ async def scan_one(client: httpx.AsyncClient, raw_url: str, cfg: Dict) -> Dict:
         "cvss": cvss,
         "confidence": confidence,
         "sid_anomaly": bool(sid_anomaly),
+        "waf": waf,
+        "exploitability": exploitability,
+        "preconditions": preconditions,
         "matched_cves": matched_cves,
         "findings": findings,
         "detail": detail,
