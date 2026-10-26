@@ -113,7 +113,7 @@
         <td><span class="mono ${hClass(r)}">${r.status}</span></td>
         <td><span class="mono">${r.php}</span></td>
         <td>${r.cvss ? `<span class="cvss ${key === "crit" ? "v-crit" : "v-warn"}">${r.cvss}</span>` : '<span class="mono" style="color:var(--fg-faint)">—</span>'}</td>
-        <td>${badge(key, verdict(r))}</td></tr>`;
+        <td>${badge(key, verdict(r))}${(r.confidence && r.confidence !== "—") ? `<span style="display:block;font-size:10px;color:var(--fg-faint);margin-top:4px;font-family:var(--mono)">${r.confidence} confidence${r.sid_anomaly ? " · anomaly" : ""}</span>` : ""}</td></tr>`;
     }).join("");
     $$("#tb tr").forEach(tr => tr.addEventListener("click", () => {
       if (tr.dataset.open === "true") openDrawer(decodeURIComponent(tr.dataset.u)); else toast("No exposure on this target", "ok");
@@ -142,11 +142,36 @@
     const box = $("#drCvssBox"); box.style.background = crit ? "var(--crit-bg)" : "var(--warn-bg)"; box.style.borderColor = crit ? "var(--crit-line)" : "var(--warn-line)";
     $("#drCvss").textContent = d ? d.cvss : "—"; $("#drCvss").style.color = crit ? "var(--crit)" : "var(--warn)";
     $("#drCve").textContent = d ? d.id : "—"; $("#drPhp").textContent = r.php;
-    $("#drBranch").textContent = crit ? "Affected" : "Confirmed PHP";
-    $("#drConf").textContent = crit ? "High" : "Medium";
+    $("#drBranch").textContent = (ev.cms && ev.cms !== "(none detected)") ? ev.cms : (crit ? "Affected" : "Confirmed PHP");
+    $("#drConf").textContent = r.confidence || ev.confidence || (crit ? "High" : "Medium");
+    const methods = (ev.detection_methods && ev.detection_methods.length)
+      ? ev.detection_methods.map(m => esc(m)).join(", ") : esc(ev.runtime_confirmed_via);
+    // Matched CVEs list (all version-range matches, with condition notes)
+    const cves = r.matched_cves || [];
+    const cvesSec = $("#drCvesSec"), cvesBox = $("#drCves");
+    if (cves.length) {
+      cvesBox.innerHTML = cves.map(m => {
+        const cm = m.condition_met;
+        const tag = !m.conditional ? `<span style="color:var(--crit)">applies</span>`
+          : cm === "likely" ? `<span style="color:var(--crit)">condition likely</span>`
+          : cm === "unlikely" ? `<span style="color:var(--fg-faint)">condition unlikely</span>`
+          : `<span style="color:var(--warn)">condition unverified</span>`;
+        const cond = m.conditional ? `<div style="font-size:11.5px;color:var(--fg-faint);margin-top:3px">Requires: ${esc(m.condition)}</div>` : "";
+        return `<div style="border:1px solid var(--line);border-radius:9px;padding:11px 13px">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:center">
+            <span style="font-family:var(--mono);font-size:12.5px;font-weight:600">${esc(m.id)}</span>
+            <span style="font-family:var(--mono);font-size:11px">CVSS ${m.cvss} · ${tag}</span>
+          </div>
+          <div style="font-size:12.5px;color:var(--fg-dim);margin-top:4px">${esc(m.title)}</div>${cond}
+        </div>`;
+      }).join("");
+      cvesSec.hidden = false;
+    } else { cvesSec.hidden = true; }
+    const anomalyLine = (ev.sid_anomaly && ev.sid_anomaly !== "(none)") ? `\n<span class="wn">⚠ ${esc(ev.sid_anomaly)}</span>` : "";
+    const conflictLine = ev.version_conflict ? `\n<span class="wn">⚠ version sources disagree (proxy may hide origin)</span>` : "";
     $("#drCode").innerHTML = crit
-      ? `<span class="dim"># response headers</span>\nHTTP/1.1 <span class="ok">${esc(ev.status)}</span>\nServer: ${esc(ev.server)}\nX-Powered-By: <span class="hl">${esc(ev.x_powered_by)}</span>\n\n<span class="dim"># version match</span>\n→ detected <span class="hl">${esc(ev.php_detected)}</span>\n→ affected by <span class="ac">${d ? d.id : CVE_A}</span>`
-      : `<span class="dim"># response headers</span>\nHTTP/1.1 <span class="ok">${esc(ev.status)}</span>\nServer: ${esc(ev.server)}\nSet-Cookie: <span class="ac">${esc(ev.php_session_cookie)}</span>\n\n<span class="dim"># runtime confirmed, version hidden</span>\n→ PHP confirmed via <span class="ac">${esc(ev.runtime_confirmed_via)}</span>\n→ <span class="hl">likely affected — manual review advised</span>`;
+      ? `<span class="dim"># response headers</span>\nHTTP/1.1 <span class="ok">${esc(ev.status)}</span>\nServer: ${esc(ev.server)}\nX-Powered-By: <span class="hl">${esc(ev.x_powered_by)}</span>\n\n<span class="dim"># detection · confidence ${esc(r.confidence || "")}</span>\nmethods: <span class="ac">${methods}</span>${conflictLine}\n\n<span class="dim"># version match</span>\n→ detected <span class="hl">${esc(ev.php_detected)}</span>\n→ affected by <span class="ac">${d ? d.id : CVE_A}</span>`
+      : `<span class="dim"># response headers</span>\nHTTP/1.1 <span class="ok">${esc(ev.status)}</span>\nServer: ${esc(ev.server)}\nSet-Cookie: <span class="ac">${esc(ev.php_session_cookie)}</span>\n\n<span class="dim"># detection · confidence ${esc(r.confidence || "")}</span>\nmethods: <span class="ac">${methods}</span>${anomalyLine}\n\n<span class="dim"># runtime confirmed, version hidden</span>\n→ PHP confirmed via <span class="ac">${esc(ev.runtime_confirmed_via)}</span>\n→ <span class="hl">likely affected — manual review advised</span>`;
     ov.classList.add("open");
   }
   $("#drX").addEventListener("click", () => ov.classList.remove("open"));

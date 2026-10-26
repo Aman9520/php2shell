@@ -506,6 +506,10 @@ https://mail.sunrise-host.example</textarea>
         <div><div class="k">Confidence</div><div class="v" id="drConf">High</div></div>
       </div>
     </div>
+    <div class="dr-sec" id="drCvesSec" hidden>
+      <h4>Matched CVEs</h4>
+      <div id="drCves" style="display:grid;gap:9px"></div>
+    </div>
     <div class="dr-sec">
       <h4>Evidence</h4>
       <div class="code" id="drCode"></div>
@@ -542,13 +546,18 @@ https://mail.sunrise-host.example</textarea>
       <div class="set-row" style="color:var(--fg-faint);font-size:12px">Edit affected ranges in signatures.py</div>
     </div>
     <div class="set-sec">
-      <h4>About</h4>
-      <div class="set-row" style="color:var(--fg-faint);font-size:12.5px">PHP2Scanner · read-only PHP2Shell exposure assessment. Source: Wiz advisory. Scan only authorized systems.</div>
+      <h4>Detection techniques</h4>
+      <div class="set-row"><span>Header fingerprint</span><code>X-Powered-By · Server</code></div>
+      <div class="set-row"><span>Session cookie</span><code>PHPSESSID</code></div>
+      <div class="set-row"><span>HTML body + meta generator</span><code>on</code></div>
+      <div class="set-row"><span>CMS fingerprint</span><code>WP · Drupal · Joomla</code></div>
+      <div class="set-row"><span>phpinfo() exposure</span><code>Deep</code></div>
+      <div class="set-row"><span>Error-page / path probe</span><code>Deep</code></div>
     </div>
   </div>
 </div>
 
 <div class="toasts" id="toasts"></div>
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=6"></script>
 </body>
 </html>
