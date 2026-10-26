@@ -262,6 +262,9 @@ async def scan_one(client: httpx.AsyncClient, raw_url: str, cfg: Dict) -> Dict:
     upload_progress = None   # True / False / None (precondition for CVE-2026-109618)
     sapi = None              # Server API: FPM / CGI / module
     multipart_reachable = None
+    cms_version = None       # exact CMS version if disclosed
+    exposed_files: List[str] = []   # exposed config / sensitive files found
+    php_constraint = None    # PHP version constraint from composer.json
 
     if deep:
         # 5. phpinfo() exposure probe — a few common info pages
@@ -340,6 +343,57 @@ async def scan_one(client: httpx.AsyncClient, raw_url: str, cfg: Dict) -> Dict:
                 methods.append("upload-progress reachable")
             except Exception:  # noqa: BLE001
                 multipart_reachable = None
+
+        _origin = origin_of(str(resp.url))
+
+        # 9. CMS version disclosure — read the files that reveal the exact CMS version
+        if cms:
+            _cms_paths = {
+                "WordPress": [("/readme.html", r"[Vv]ersion\s+(\d+\.\d+(?:\.\d+)?)")],
+                "Drupal": [("/CHANGELOG.txt", r"Drupal\s+(\d+\.\d+(?:\.\d+)?)"),
+                           ("/core/CHANGELOG.txt", r"Drupal\s+(\d+\.\d+(?:\.\d+)?)")],
+                "Joomla": [("/administrator/manifests/files/joomla.xml", r"<version>\s*(\d+\.\d+(?:\.\d+)?)")],
+            }
+            for path, rx in _cms_paths.get(cms, []):
+                try:
+                    rc = await client.get(_origin + path, timeout=timeout, follow_redirects=follow)
+                except Exception:  # noqa: BLE001
+                    continue
+                if rc.status_code == 200:
+                    mm = re.search(rx, _body_text(rc))
+                    if mm:
+                        cms_version = f"{cms} {mm.group(1)}"
+                        methods.append("CMS version disclosed")
+                        if not php:
+                            php = _extract_php(rc.headers.get("x-powered-by", "")) or php
+                        break
+
+        # 10. Exposed config / sensitive files (read-only). composer files reveal the
+        #     PHP version constraint; .git/config and server-status are info-disclosure
+        #     findings in their own right. Content is signature-checked to avoid soft-404s.
+        for path in ("/composer.json", "/composer.lock", "/.git/config", "/server-status", "/server-info"):
+            try:
+                rf = await client.get(_origin + path, timeout=timeout, follow_redirects=follow)
+            except Exception:  # noqa: BLE001
+                continue
+            if rf.status_code != 200:
+                continue
+            bf = _body_text(rf)
+            if path.startswith("/composer") and ('"require"' in bf or '"php"' in bf or '"packages"' in bf):
+                exposed_files.append(path)
+                cm = re.search(r'"php"\s*:\s*"([^"]+)"', bf)
+                if cm:
+                    php_constraint = cm.group(1)
+                if not php:
+                    php = _extract_php(bf) or php
+            elif path == "/.git/config" and "[core]" in bf:
+                exposed_files.append(path)
+            elif path in ("/server-status", "/server-info") and ("Apache Server Status" in bf or "Server Version" in bf):
+                exposed_files.append(path)
+                if not php:
+                    php = _extract_php(bf) or php
+        if exposed_files:
+            methods.append(f"{len(exposed_files)} exposed file(s)")
 
     # PHP runtime confirmed by any strong signal
     php_confirmed = bool(php) or bool(session_cookie) or ("php" in (powered + " " + server).lower()) or bool(cms)
@@ -438,11 +492,14 @@ async def scan_one(client: httpx.AsyncClient, raw_url: str, cfg: Dict) -> Dict:
         "versions_seen": sorted(versions_seen) or ["(none)"],
         "version_conflict": len({v for v in versions_seen if v}) > 1,
         "cms": cms or "(none detected)",
+        "cms_version": cms_version or "(not disclosed)",
         "waf": waf or "(none detected)",
         "mitigation_note": (f"{waf} may provide an edge mitigation — patch the PHP version regardless"
                             if (waf in _MITIGATING and state in ("vuln", "potential")) else ""),
         "os_hint": os_hint or "(unknown)",
         "sapi": sapi or "(unknown)",
+        "php_constraint": php_constraint or "(none)",
+        "exposed_files": exposed_files,
         "upload_progress": ("enabled" if upload_progress is True else "disabled" if upload_progress is False else "(not checked)"),
         "multipart_reachable": bool(multipart_reachable),
         "preconditions": preconditions,
@@ -470,6 +527,7 @@ async def scan_one(client: httpx.AsyncClient, raw_url: str, cfg: Dict) -> Dict:
         "waf": waf,
         "exploitability": exploitability,
         "preconditions": preconditions,
+        "exposed_files": exposed_files,
         "matched_cves": matched_cves,
         "findings": findings,
         "detail": detail,
