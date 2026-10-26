@@ -100,6 +100,8 @@ SIGNATURES: List[Dict] = [
         "severity": "Critical",
         "cvss": 9.2,
         "vector": "Network / Unauthenticated (CVSS v4.0)",
+        "condition": None,          # applies to any PHP deployment in range
+        "conditional": False,
         "affected": _PHP2SHELL_AFFECTED,
         "fixed": _PHP2SHELL_FIXED,
         "remediation": [
@@ -118,6 +120,8 @@ SIGNATURES: List[Dict] = [
         "severity": "Critical",
         "cvss": 9.2,
         "vector": "Network / Unauthenticated (CVSS v4.0)",
+        "condition": None,
+        "conditional": False,
         "affected": _PHP2SHELL_AFFECTED,
         "fixed": _PHP2SHELL_FIXED,
         "remediation": [
@@ -163,6 +167,9 @@ def evaluate(php_version: Optional[str], php_confirmed: bool = False) -> Dict[st
             "cvss": sig["cvss"],
             "vector": sig["vector"],
             "fixed": sig["fixed"],
+            "condition": sig.get("condition"),
+            "conditional": sig.get("conditional", False),
+            "condition_hint": sig.get("condition_hint"),
             "status": status,
             "remediation": sig["remediation"],
             "references": sig["references"],
