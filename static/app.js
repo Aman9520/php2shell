@@ -169,9 +169,14 @@
     } else { cvesSec.hidden = true; }
     const anomalyLine = (ev.sid_anomaly && ev.sid_anomaly !== "(none)") ? `\n<span class="wn">⚠ ${esc(ev.sid_anomaly)}</span>` : "";
     const conflictLine = ev.version_conflict ? `\n<span class="wn">⚠ version sources disagree (proxy may hide origin)</span>` : "";
+    const wafLine = (ev.waf && ev.waf !== "(none detected)") ? `\nWAF/CDN: <span class="ac">${esc(ev.waf)}</span>` : "";
+    const mitLine = ev.mitigation_note ? `\n<span class="wn">ℹ ${esc(ev.mitigation_note)}</span>` : "";
+    const exploit = r.exploitability || ev.exploitability || "";
+    const preconds = (ev.preconditions && ev.preconditions.length) ? ev.preconditions.map(p => esc(p)).join(", ") : "version match only";
+    const exploitBlock = exploit ? `\n\n<span class="dim"># exploitability assessment</span>\nverdict: <span class="hl">${esc(exploit)}</span>\npreconditions: <span class="ac">${preconds}</span>` + ((ev.sapi && ev.sapi !== "(unknown)") ? `\nSAPI: ${esc(ev.sapi)}` : "") : "";
     $("#drCode").innerHTML = crit
-      ? `<span class="dim"># response headers</span>\nHTTP/1.1 <span class="ok">${esc(ev.status)}</span>\nServer: ${esc(ev.server)}\nX-Powered-By: <span class="hl">${esc(ev.x_powered_by)}</span>\n\n<span class="dim"># detection · confidence ${esc(r.confidence || "")}</span>\nmethods: <span class="ac">${methods}</span>${conflictLine}\n\n<span class="dim"># version match</span>\n→ detected <span class="hl">${esc(ev.php_detected)}</span>\n→ affected by <span class="ac">${d ? d.id : CVE_A}</span>`
-      : `<span class="dim"># response headers</span>\nHTTP/1.1 <span class="ok">${esc(ev.status)}</span>\nServer: ${esc(ev.server)}\nSet-Cookie: <span class="ac">${esc(ev.php_session_cookie)}</span>\n\n<span class="dim"># detection · confidence ${esc(r.confidence || "")}</span>\nmethods: <span class="ac">${methods}</span>${anomalyLine}\n\n<span class="dim"># runtime confirmed, version hidden</span>\n→ PHP confirmed via <span class="ac">${esc(ev.runtime_confirmed_via)}</span>\n→ <span class="hl">likely affected — manual review advised</span>`;
+      ? `<span class="dim"># response headers</span>\nHTTP/1.1 <span class="ok">${esc(ev.status)}</span>\nServer: ${esc(ev.server)}\nX-Powered-By: <span class="hl">${esc(ev.x_powered_by)}</span>${wafLine}\n\n<span class="dim"># detection · confidence ${esc(r.confidence || "")}</span>\nmethods: <span class="ac">${methods}</span>${conflictLine}${mitLine}\n\n<span class="dim"># version match</span>\n→ detected <span class="hl">${esc(ev.php_detected)}</span>\n→ affected by <span class="ac">${d ? d.id : CVE_A}</span>${exploitBlock}`
+      : `<span class="dim"># response headers</span>\nHTTP/1.1 <span class="ok">${esc(ev.status)}</span>\nServer: ${esc(ev.server)}\nSet-Cookie: <span class="ac">${esc(ev.php_session_cookie)}</span>${wafLine}\n\n<span class="dim"># detection · confidence ${esc(r.confidence || "")}</span>\nmethods: <span class="ac">${methods}</span>${anomalyLine}${mitLine}\n\n<span class="dim"># runtime confirmed, version hidden</span>\n→ PHP confirmed via <span class="ac">${esc(ev.runtime_confirmed_via)}</span>\n→ <span class="hl">likely affected — manual review advised</span>${exploitBlock}`;
     ov.classList.add("open");
   }
   $("#drX").addEventListener("click", () => ov.classList.remove("open"));
