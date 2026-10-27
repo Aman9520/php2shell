@@ -182,7 +182,49 @@
     $("#drCode").innerHTML = crit
       ? `<span class="dim"># response headers</span>\nHTTP/1.1 <span class="ok">${esc(ev.status)}</span>\nServer: ${esc(ev.server)}\nX-Powered-By: <span class="hl">${esc(ev.x_powered_by)}</span>${wafLine}\n\n<span class="dim"># detection · confidence ${esc(r.confidence || "")}</span>\nmethods: <span class="ac">${methods}</span>${conflictLine}${mitLine}\n\n<span class="dim"># version match</span>\n→ detected <span class="hl">${esc(ev.php_detected)}</span>\n→ affected by <span class="ac">${d ? d.id : CVE_A}</span>${exploitBlock}${reconBlock}`
       : `<span class="dim"># response headers</span>\nHTTP/1.1 <span class="ok">${esc(ev.status)}</span>\nServer: ${esc(ev.server)}\nSet-Cookie: <span class="ac">${esc(ev.php_session_cookie)}</span>${wafLine}\n\n<span class="dim"># detection · confidence ${esc(r.confidence || "")}</span>\nmethods: <span class="ac">${methods}</span>${anomalyLine}${mitLine}\n\n<span class="dim"># runtime confirmed, version hidden</span>\n→ PHP confirmed via <span class="ac">${esc(ev.runtime_confirmed_via)}</span>\n→ <span class="hl">likely affected — manual review advised</span>${exploitBlock}${reconBlock}`;
+    buildVerification(r, ev, d);
     ov.classList.add("open");
+  }
+
+  // Build read-only manual-verification steps (proof of exposure — NOT an exploit)
+  function buildVerification(r, ev, d) {
+    let origin = r.url; try { origin = new URL(r.url).origin; } catch (e) {}
+    const steps = [];
+    const stepHtml = (n, desc, cmd, link) => `
+      <div style="display:flex;gap:11px">
+        <span style="width:22px;height:22px;border-radius:7px;background:var(--accent-weak);color:var(--accent);font-size:11px;font-weight:700;display:grid;place-items:center;flex:none">${n}</span>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;color:var(--fg-dim);line-height:1.5">${desc}</div>
+          ${cmd ? `<code style="display:block;margin-top:7px;font-family:var(--mono);font-size:12px;background:var(--surface-2);border:1px solid var(--line);border-radius:7px;padding:8px 11px;overflow-x:auto;color:var(--fg-dim);white-space:pre">${esc(cmd)}</code>` : ""}
+          ${link ? `<a href="${esc(link)}" target="_blank" rel="noopener" style="display:inline-block;margin-top:7px;font-family:var(--mono);font-size:12px;color:var(--accent);word-break:break-all">${esc(link)} ↗</a>` : ""}
+        </div>
+      </div>`;
+
+    let n = 1;
+    steps.push(stepHtml(n++, "Inspect the response headers for the stack and any disclosed PHP version.", `curl -sI ${r.url}`));
+
+    if (ev.phpinfo_exposed && ev.phpinfo_exposed !== "(not found)") {
+      steps.push(stepHtml(n++, "Open the exposed <b>phpinfo()</b> page the scanner found and read the exact PHP version — this confirms the finding visually.", null, ev.phpinfo_exposed));
+      steps.push(stepHtml(n++, "Or pull the exact version from the command line:", `curl -s ${ev.phpinfo_exposed} | grep -i "PHP Version"`));
+    } else if (ev.php_detected && !/hidden/.test(ev.php_detected)) {
+      steps.push(stepHtml(n++, "Confirm the version the scanner read is what the server actually returns:", `curl -s ${r.url} -D - -o /dev/null | grep -i "x-powered-by\\|server"`));
+    } else {
+      steps.push(stepHtml(n++, "The version is hidden in headers. Try the paths the scanner probes to recover it, or inspect a .php route's headers:", `curl -sI ${origin}/index.php`));
+    }
+
+    (ev.exposed_files || []).forEach(f => {
+      steps.push(stepHtml(n++, `Review the exposed file the scanner found (information disclosure in its own right):`, null, origin + f));
+    });
+
+    const fixed = d && d.fixed ? d.fixed : "8.5.12 / 8.4.27 / 8.3.36 / 8.2.35";
+    const detected = (ev.php_detected && !/hidden/.test(ev.php_detected)) ? ev.php_detected : "the detected version";
+    steps.push(stepHtml(n++, `Confirm <b>${esc(detected)}</b> is below the patched release for its branch (<b>${esc(fixed)}</b>). PHP 8.1 and older are end-of-life and remain vulnerable regardless of patch level.`, null, null));
+
+    $("#drVerify").innerHTML =
+      `<div style="font-size:12px;color:var(--fg-faint);line-height:1.5;padding:9px 11px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px">
+         These are <b>read-only</b> checks to independently confirm the exposure — no exploit is sent. Run them only against systems you are authorized to test.
+       </div>` + steps.join("");
+    $("#drVerifySec").hidden = false;
   }
   $("#drX").addEventListener("click", () => ov.classList.remove("open"));
   ov.addEventListener("click", e => { if (e.target === ov) ov.classList.remove("open"); });

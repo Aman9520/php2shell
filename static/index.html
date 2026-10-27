@@ -383,7 +383,7 @@
   <div class="grid">
     <!-- Scan console -->
     <div class="card">
-      <div class="card-head"><h2>New assessment</h2><span class="hint">read-only · up to 500 targets</span></div>
+      <div class="card-head"><h2>New assessment</h2><span class="hint">read-only · up to 1000 targets</span></div>
       <div class="card-body">
         <div class="seg" id="seg">
           <button class="on" data-t="single">Single target</button>
@@ -514,6 +514,10 @@ https://mail.sunrise-host.example</textarea>
       <h4>Evidence</h4>
       <div class="code" id="drCode"></div>
     </div>
+    <div class="dr-sec" id="drVerifySec">
+      <h4>How to verify manually · read-only</h4>
+      <div id="drVerify" style="display:grid;gap:13px"></div>
+    </div>
     <div class="dr-sec">
       <h4>Remediation</h4>
       <div class="steps">
@@ -563,6 +567,6 @@ https://mail.sunrise-host.example</textarea>
 </div>
 
 <div class="toasts" id="toasts"></div>
-<script src="/static/app.js?v=9"></script>
+<script src="/static/app.js?v=10"></script>
 </body>
 </html>
