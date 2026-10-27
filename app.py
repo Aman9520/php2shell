@@ -45,7 +45,7 @@ from signatures import SIGNATURES, SIGNATURE_IDS
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-MAX_TARGETS = 500
+MAX_TARGETS = 1000
 HARD_CONCURRENCY_CAP = 50
 
 app = FastAPI(title="PHP2Scanner", version="1.0.0")
